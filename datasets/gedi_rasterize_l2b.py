@@ -120,21 +120,24 @@ def create_export(
   """
   if not table_asset_ids:
     raise ValueError('No table asset ids specified')
+  table_asset_dts = []
+  table_asset_months = []
+  for asset_id in table_asset_ids:
+    date_obj = parse_date_from_gedi_filename(asset_id)
+    table_asset_dts.append(date_obj)
+    table_asset_months.append(date_obj.month)
   first_datetime = parse_date_from_gedi_filename(table_asset_ids[0])
-  month = first_datetime.month
+  month = max(set(table_asset_months), key=table_asset_months.count)
   year = first_datetime.year
   # pylint:disable=g-tzinfo-datetime
   # We don't care about pytz problems with DST - this is just UTC.
   month_start = datetime.datetime(year, month, 1, tzinfo=pytz.UTC)
   # pylint:enable=g-tzinfo-datetime
   month_end = month_start + relativedelta.relativedelta(months=1)
-
-  for table_asset_id in table_asset_ids:
-    dt = parse_date_from_gedi_filename(table_asset_id)
-    if dt < month_start or dt >= month_end:
-      raise ValueError(
-          'Vector asset %s has datetime %s, which is outside of the expected '
-          'month %s-%s' % (table_asset_id, dt, year, month))
+  if all((date < month_start or date >= month_end) for date in table_asset_dts):
+    raise ValueError(
+        'ALL the vector points are outside of the expected month that is ranging'
+        ' from %s to %s' % (month_start, month_end))
 
   @memoize.Memoize()
   def get_raster_bands(band):
@@ -156,7 +159,12 @@ def create_export(
     shots.append(ee.FeatureCollection(table_asset_id))
 
   box = grid_cell_feature.geometry().buffer(2500, 25).bounds()
-  shots = ee.FeatureCollection(shots).flatten().filterBounds(box)
+  shots = ee.FeatureCollection(shots).flatten().filterBounds(box).filter(
+      ee.Filter.date(
+          month_start.strftime('%Y-%m-%d'),
+          month_end.strftime('%Y-%m-%d')
+          )
+      )
   # We use ee.Reducer.first() below, so this will pick the point with the
   # higherst sensitivity.
   shots = shots.sort('sensitivity', False)
